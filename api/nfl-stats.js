@@ -7,79 +7,80 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
+  const API_KEY = process.env.SPORTSDATA_API_KEY;
+  
+  if (!API_KEY) {
+    return res.status(500).json({ error: 'SportsData API key not configured' });
+  }
+
   try {
-    // Fetch NFL standings from ESPN
-    const standingsResponse = await fetch('https://site.api.espn.com/apis/site/v2/sports/football/nfl/standings');
+    const currentYear = new Date().getFullYear();
+    const season = currentYear; // NFL season year
+    
+    // Fetch standings from SportsData.io
+    const standingsUrl = `https://api.sportsdata.io/v3/nfl/scores/json/Standings/${season}?key=${API_KEY}`;
+    const standingsResponse = await fetch(standingsUrl);
+    
+    if (!standingsResponse.ok) {
+      throw new Error(`SportsData API error: ${standingsResponse.status}`);
+    }
+    
     const standingsData = await standingsResponse.json();
     
     const teams = {};
     
-    // Process each conference
-    if (standingsData.children && Array.isArray(standingsData.children)) {
-      standingsData.children.forEach(conference => {
-        if (conference.standings && conference.standings.entries) {
-          conference.standings.entries.forEach(entry => {
-            try {
-              const team = entry.team;
-              const stats = entry.stats || [];
-              
-              // Extract stats
-              const wins = stats.find(s => s.name === 'wins')?.value || 0;
-              const losses = stats.find(s => s.name === 'losses')?.value || 0;
-              const pointsFor = stats.find(s => s.name === 'pointsFor')?.value || 0;
-              const pointsAgainst = stats.find(s => s.name === 'pointsAgainst')?.value || 0;
-              
-              const totalGames = wins + losses;
-              const winPct = totalGames > 0 ? wins / totalGames : 0.5;
-              const pointDiff = totalGames > 0 ? (pointsFor - pointsAgainst) / totalGames : 0;
-              
-              // Calculate Elo rating
-              // Base of 1300, adjusted by win% and point differential
-              const elo = 1300 + (winPct * 400) + (pointDiff * 3);
-              
-              teams[team.displayName] = {
-                name: team.displayName,
-                abbreviation: team.abbreviation || team.displayName,
-                wins: wins,
-                losses: losses,
-                winPct: (winPct * 100).toFixed(1),
-                pointsFor: pointsFor,
-                pointsAgainst: pointsAgainst,
-                pointDiff: pointsFor - pointsAgainst,
-                elo: Math.round(elo)
-              };
-            } catch (err) {
-              console.error('Error processing team:', err);
-            }
-          });
-        }
-      });
-    }
+    // Process each team
+    standingsData.forEach(team => {
+      const wins = team.Wins || 0;
+      const losses = team.Losses || 0;
+      const pointsFor = team.PointsFor || 0;
+      const pointsAgainst = team.PointsAgainst || 0;
+      
+      const totalGames = wins + losses;
+      const winPct = totalGames > 0 ? wins / totalGames : 0.5;
+      const pointDiff = totalGames > 0 ? (pointsFor - pointsAgainst) / totalGames : 0;
+      
+      // Calculate Elo rating
+      // Base of 1300, adjusted by win% (up to 400 points) and point differential (up to 3 points per game)
+      const elo = 1300 + (winPct * 400) + (pointDiff * 3);
+      
+      teams[team.Name] = {
+        name: team.Name,
+        abbreviation: team.Key,
+        wins: wins,
+        losses: losses,
+        winPct: (winPct * 100).toFixed(1),
+        pointsFor: pointsFor,
+        pointsAgainst: pointsAgainst,
+        pointDiff: pointsFor - pointsAgainst,
+        elo: Math.round(elo)
+      };
+    });
 
-    // Fetch injuries
+    // Fetch injuries from SportsData.io
     let injuries = {};
     try {
-      const injuriesResponse = await fetch('https://site.api.espn.com/apis/site/v2/sports/football/nfl/injuries');
-      const injuriesData = await injuriesResponse.json();
+      const injuriesUrl = `https://api.sportsdata.io/v3/nfl/scores/json/Injuries/${season}?key=${API_KEY}`;
+      const injuriesResponse = await fetch(injuriesUrl);
       
-      if (injuriesData.teams && Array.isArray(injuriesData.teams)) {
-        injuriesData.teams.forEach(team => {
-          try {
-            const teamName = team.team.displayName;
-            const keyInjuries = team.injuries
-              .filter(inj => inj.status === 'Out' || inj.status === 'Doubtful')
-              .map(inj => ({
-                player: inj.longName || inj.athlete?.displayName || 'Unknown',
-                position: inj.position || 'N/A',
-                status: inj.status,
-                detail: inj.details?.type || ''
-              }));
+      if (injuriesResponse.ok) {
+        const injuriesData = await injuriesResponse.json();
+        
+        // Group injuries by team
+        injuriesData.forEach(injury => {
+          if (injury.Status === 'Out' || injury.Status === 'Doubtful') {
+            const teamName = injury.Team;
             
-            if (keyInjuries.length > 0) {
-              injuries[teamName] = keyInjuries;
+            if (!injuries[teamName]) {
+              injuries[teamName] = [];
             }
-          } catch (err) {
-            console.error('Error processing injuries:', err);
+            
+            injuries[teamName].push({
+              player: injury.Name,
+              position: injury.Position,
+              status: injury.Status,
+              detail: injury.InjuryBodyPart || ''
+            });
           }
         });
       }
@@ -91,14 +92,15 @@ export default async function handler(req, res) {
       teams, 
       injuries,
       timestamp: new Date().toISOString(),
-      teamCount: Object.keys(teams).length
+      teamCount: Object.keys(teams).length,
+      source: 'SportsData.io'
     });
     
   } catch (error) {
-    console.error('NFL Stats API Error:', error);
+    console.error('SportsData API Error:', error);
     return res.status(500).json({ 
       error: error.message,
-      details: 'Failed to fetch NFL stats from ESPN'
+      details: 'Failed to fetch NFL stats from SportsData.io'
     });
   }
 }
