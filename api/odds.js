@@ -1,8 +1,8 @@
 export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  
   const { sport } = req.query;
   const API_KEY = process.env.ODDS_API_KEY;
-
-  res.setHeader('Access-Control-Allow-Origin', '*');
 
   if (!API_KEY) {
     return res.status(500).json({ error: 'API key not configured' });
